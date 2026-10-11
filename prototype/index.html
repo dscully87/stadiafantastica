@@ -87,7 +87,7 @@
     </div>
   </div>
 
-  <p class="note">In the real product the handle, picture and follower count come straight from X login. Each dot is a group of followers when the venue is big, and the stadium size steps up as you grow.</p>
+  <p class="note">In the real product the handle, picture and follower count come straight from X login. Every dot is one follower, up to 100,000. Past that, dots stand for small groups. As the venue grows the crowd gets bigger and the stage shrinks into the distance.</p>
 </div>
 
 <script>
@@ -125,13 +125,19 @@
   var seatCache = {};
   function buildSeats(cap) {
     if (seatCache[cap]) return seatCache[cap];
+    var cached = Object.keys(seatCache);
+    if (cached.length > 3) delete seatCache[cached[0]];
     var rand = rng(cap);
-    var D = Math.min(cap, 3200);
-    var t = clamp((Math.log10(cap) - 2) / 4, 0, 1);
-    var r0 = 70, rMax = 230 + 140 * t;
+    // one dot per follower up to 100,000; bigger venues keep that density
+    var D = Math.min(cap, 100000);
+    // bigger venue: the crowd grows to fill the frame and the stage pulls back
+    var t = clamp((Math.log10(cap) - 2) / 3, 0, 1);
+    var sc = 1 - 0.38 * t;
+    var cx = 600, cy = 18 + 196 * sc - 24;
+    var r0 = 50, rMax = (r0 + 45) + ((560 - cy) - (r0 + 45)) * t;
     var a0 = 14 * Math.PI / 180, a1 = Math.PI - a0, span = a1 - a0;
-    var AX = 1.55, cx = 600, cy = 190;
-    var s = Math.sqrt(span * 1.3 * (rMax * rMax - r0 * r0) / (2 * D));
+    var AX = Math.min(1.55, 586 / (rMax * Math.cos(a0)));
+    var s = Math.sqrt(AX * span * (rMax * rMax - r0 * r0) / (2 * D));
     var rows = Math.max(2, Math.floor((rMax - r0) / s) + 1);
     var dr = (rMax - r0) / (rows - 1);
     var aisles = [54 * Math.PI / 180, 126 * Math.PI / 180], gap = 1.7 * Math.PI / 180;
@@ -139,7 +145,8 @@
     for (var i = 0; i < rows; i++) {
       var r = r0 + i * dr, acc = (i % 2) * s / 2;
       var px = cx + AX * r * Math.cos(a0), py = cy + r * Math.sin(a0);
-      for (var th = a0; th <= a1; th += 0.002) {
+      var dth = 0.5 * s / (AX * r);
+      for (var th = a0; th <= a1; th += dth) {
         var x = cx + AX * r * Math.cos(th), y = cy + r * Math.sin(th);
         acc += Math.hypot(x - px, y - py); px = x; py = y;
         if (acc < s) continue;
@@ -150,7 +157,7 @@
       }
     }
     seats.sort(function (a, b) { return a.key - b.key; });
-    var out = { seats: seats, rad: Math.min(s * 0.36, 9), per: cap / seats.length };
+    var out = { seats: seats, rad: Math.min(s * 0.36, 9), s: s, sc: sc, per: cap / seats.length };
     seatCache[cap] = out;
     return out;
   }
@@ -217,17 +224,25 @@
     // crowd
     var rad = layout.rad;
     var lit = ['#fff2dc', '#ffd9a8', '#ff7ac6', '#7ae7ff', '#ffffff'];
+    var dot = function (x, y, r) {
+      if (r < 1.2) ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      else { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill(); }
+    };
+    var rEmpty = Math.max(rad * 0.85, 0.5), rLit = Math.max(rad, 0.6);
     ctx.fillStyle = 'rgba(70,78,125,0.30)';
-    for (var i = filled; i < seats.length; i++) {
-      ctx.beginPath(); ctx.arc(seats[i].x, seats[i].y, rad * 0.85, 0, 6.2832); ctx.fill();
-    }
-    for (var j = 0; j < filled; j++) {
-      var st = seats[j];
-      var col = lit[Math.floor(st.c * lit.length)];
-      ctx.globalAlpha = 0.07; ctx.fillStyle = col;
-      ctx.beginPath(); ctx.arc(st.x, st.y, rad * 2.3, 0, 6.2832); ctx.fill();
+    for (var i = filled; i < seats.length; i++) dot(seats[i].x, seats[i].y, rEmpty);
+    for (var ci = 0; ci < lit.length; ci++) {
+      ctx.fillStyle = lit[ci];
+      if (layout.s >= 5) {
+        ctx.globalAlpha = 0.07;
+        for (var g = 0; g < filled; g++) {
+          if (Math.floor(seats[g].c * lit.length) === ci) dot(seats[g].x, seats[g].y, rad * 2.3);
+        }
+      }
       ctx.globalAlpha = 0.95;
-      ctx.beginPath(); ctx.arc(st.x, st.y, rad, 0, 6.2832); ctx.fill();
+      for (var j = 0; j < filled; j++) {
+        if (Math.floor(seats[j].c * lit.length) === ci) dot(seats[j].x, seats[j].y, rLit);
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -238,6 +253,10 @@
     beam(710, 800, 70, 'rgba(255,179,71,A)', 0.16);
     beam(850, 1080, 90, 'rgba(255,61,154,A)', 0.20);
     ctx.globalCompositeOperation = 'source-over';
+
+    // stage pulls back as the venue grows
+    ctx.save();
+    ctx.translate(600, 18); ctx.scale(layout.sc, layout.sc); ctx.translate(-600, -18);
 
     // lighting truss
     ctx.fillStyle = '#1a1e36'; ctx.fillRect(250, 18, 700, 8);
@@ -297,6 +316,8 @@
     // reflection on the deck
     ctx.globalAlpha = 0.18; ctx.fillStyle = C.hot;
     ctx.beginPath(); ctx.ellipse(ax, 196, 74, 9, 0, 0, 6.2832); ctx.fill(); ctx.globalAlpha = 1;
+
+    ctx.restore();
 
     // footer strip
     var fb = ctx.createLinearGradient(0, 570, 0, H);
